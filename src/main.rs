@@ -2,9 +2,17 @@ use nannou::{event::Update, glam::Vec2, state::mouse, App, Frame};
 use rand::Rng;
 use std::sync::mpsc::channel;
 use rayon::iter::{plumbing::bridge, IntoParallelIterator, ParallelIterator};
+use nannou_egui::{self, egui, Egui};
 
 mod vehicle;
 use vehicle::Vehicle;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BuildMode {
+    Place,
+    Remove,
+    Inactive,
+}
 
 
 fn main() {
@@ -12,6 +20,7 @@ fn main() {
 }
 
 struct Model {
+    pub egui: Egui, 
     width: f32,
     height: f32,
     vehicles: Vec<Vehicle>,
@@ -20,16 +29,20 @@ struct Model {
     light_intensity: f32,
     mouse_intensity: f32,
     car_intensity: f32,
+    build_mode: BuildMode,
 }
 
 impl Model {
     fn new(app: &nannou::App) -> Self {
-        app.new_window()
+        let window_id = app.new_window()
             .size(800 as u32, 600 as u32)
             .view(Model::view)
+            .raw_event(raw_window_event)
             .resized(Model::resized)
             .build()
             .unwrap();
+
+        let window = app.window(window_id).unwrap();
 
         let mut rng = rand::thread_rng();
         let random_lights = (0..100).map(|_| Vec2::new(
@@ -38,6 +51,7 @@ impl Model {
         )).collect();
 
         Model {
+            egui: Egui::from_window(&window),
             width: 800.0,
             height: 600.0,
             vehicles: vec![Vehicle::new()],
@@ -46,6 +60,7 @@ impl Model {
             light_intensity: 30.0,
             mouse_intensity: 1000.0,
             car_intensity: 10.0,
+            build_mode: BuildMode::Inactive,
         }
     }
 
@@ -61,6 +76,8 @@ impl Model {
     }
 
     fn update(app: &App, model: &mut Self, update: Update) {
+        model.update_gui(update);
+
         if app.keys.down.contains(&nannou::event::Key::Space) {
             model.vehicles.push(Vehicle::new());
         } else if app.keys.down.contains(&nannou::event::Key::R) {
@@ -68,20 +85,23 @@ impl Model {
             model.vehicles.push(Vehicle::new());
         }
 
-        if app.mouse.buttons.left().is_down() {
-            let mouse_position = app.mouse.position();
-            model.lights
-                .retain(|light| (mouse_position - *light).length() > 50.0);
-        }
-
-        // add points in at mouse pos in 10 radius ramdomly if right is pressed 
-        if app.mouse.buttons.right().is_down() {
-            let mouse_position = app.mouse.position();
-            let mut rng = rand::thread_rng();
-            model.lights.push(Vec2::new(
-                rng.gen_range(mouse_position.x - 10.0..mouse_position.x + 10.0),
-                rng.gen_range(mouse_position.y - 10.0..mouse_position.y + 10.0),
-            ));     
+        match model.build_mode {
+            BuildMode::Place => {
+                let mouse_position = app.mouse.position();
+                let mut rng = rand::thread_rng();
+                model.lights.push(Vec2::new(
+                    rng.gen_range(mouse_position.x - 10.0..mouse_position.x + 10.0),
+                    rng.gen_range(mouse_position.y - 10.0..mouse_position.y + 10.0),
+                ));     
+            },
+            BuildMode::Remove => {
+                if app.mouse.buttons.left().is_down() {
+                    let mouse_position = app.mouse.position();
+                    model.lights
+                        .retain(|light| (mouse_position - *light).length() > 50.0);
+                }
+            },
+            BuildMode::Inactive => {},
         }
 
         let delta = update.since_last.as_secs_f32();
@@ -142,10 +162,19 @@ impl Model {
 
         let (tx, rx) = channel();
 
+        let light_intensity = model.light_intensity;
+        let car_intensity = model.car_intensity;
+        let mouse_intensity = model.mouse_intensity;
+        let mouse_light = model.mouse_light;
+        let height = model.height;
+        let width = model.width;
+        let lights = &model.lights;
+        let vehicles = &model.vehicles;
+
         (0..=model.width as i32 / tile_size as i32).into_par_iter().for_each_with(tx, |tx, i| {
-            let result = (-1..=model.height as i32 / tile_size as i32).into_iter().map(|j| {
-                let x_center = i as f32 * tile_size + 10.0 - model.width / 2.0;
-                let y_center = j as f32 * tile_size + tile_size - model.height / 2.0;
+            let result = (-1..=height as i32 / tile_size as i32).into_iter().map(|j| {
+                let x_center = i as f32 * tile_size + 10.0 - width / 2.0;
+                let y_center = j as f32 * tile_size + tile_size - height / 2.0;
                 // let mut light_intensity = model.lights.iter().fold(0.0, |acc, light| {
                 //     acc + model.light_intensity * 3.0 / (Vec2::new(x_center, y_center) - *light).length().powi(2)
                 // });
@@ -153,14 +182,14 @@ impl Model {
                 //     light_intensity += model.car_intensity * 3.0 / (Vec2::new(x_center, y_center) - vehicle.position).length().powi(2);
                 // }
 
-                let red = model.lights.iter().fold(0.0, |acc, light| {
-                    acc + model.light_intensity * 3.0 / (Vec2::new(x_center, y_center) - *light).length().powi(2)
+                let red = lights.iter().fold(0.0, |acc, light| {
+                    acc + light_intensity * 3.0 / (Vec2::new(x_center, y_center) - *light).length().powi(2)
                 });
                 
-                let mut blue = model.vehicles.iter().fold(0.0, |acc, vehicle| {
-                    acc + model.car_intensity * 3.0 / (Vec2::new(x_center, y_center) - vehicle.position).length().powi(2)
+                let mut blue = vehicles.iter().fold(0.0, |acc, vehicle| {
+                    acc + car_intensity * 3.0 / (Vec2::new(x_center, y_center) - vehicle.position).length().powi(2)
                 });
-                blue += model.mouse_intensity * 3.0 / (Vec2::new(x_center, y_center) - model.mouse_light).length().powi(2);
+                blue += mouse_intensity * 3.0 / (Vec2::new(x_center, y_center) - mouse_light).length().powi(2);
 
                 let green = 0.0;
                 
@@ -201,6 +230,37 @@ impl Model {
             .color(nannou::color::BLUE);
 
         draw.to_frame(app, &frame).unwrap();
+        model.egui.draw_to_frame(&frame).unwrap();
     }
 
+    pub fn update_gui(&mut self, update: Update) {
+        self.egui.set_elapsed_time(update.since_start);
+        let ctx = self.egui.begin_frame();
+        egui::Window::new("Settings").show(&ctx, |ui| {
+            ui.label("Mouse light intensity");
+            ui.add(egui::Slider::new(&mut self.mouse_intensity, 0.0..=5000.0));
+            ui.label("Car light intensity");
+            ui.add(egui::Slider::new(&mut self.car_intensity, 0.0..=100.0));
+            ui.label("Light intensity");
+            ui.add(egui::Slider::new(&mut self.light_intensity, 0.0..=100.0));
+            ui.label("Build mode");
+            nannou_egui::egui::ComboBox::from_label("")
+                .selected_text(match self.build_mode {
+                    BuildMode::Place => "Place",
+                    BuildMode::Remove => "Remove",
+                    BuildMode::Inactive => "Inactive",
+                })
+                .show_ui(ui, |ui|{
+                ui.selectable_value(&mut self.build_mode, BuildMode::Place, "Place");
+                ui.selectable_value(&mut self.build_mode, BuildMode::Remove, "Remove");
+                ui.selectable_value(&mut self.build_mode, BuildMode::Inactive, "Inactive");
+            });
+        });
+    
+    }
+
+}
+
+fn raw_window_event(_app: &App, model: &mut Model, event: &nannou::winit::event::WindowEvent) {
+    model.egui.handle_raw_event(event);
 }
