@@ -1,7 +1,7 @@
-use nannou::{event::Update, glam::Vec2, state::mouse, App, Frame};
+use nannou::{event::Update, glam::Vec2, App, Frame};
 use rand::Rng;
 use std::sync::mpsc::channel;
-use rayon::iter::{plumbing::bridge, IntoParallelIterator, ParallelIterator};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use nannou_egui::{self, egui, Egui};
 
 mod vehicle;
@@ -86,7 +86,7 @@ impl Model {
         }
 
         match model.build_mode {
-            BuildMode::Place => {
+            BuildMode::Place if app.mouse.buttons.left().is_down() => {
                 let mouse_position = app.mouse.position();
                 let mut rng = rand::thread_rng();
                 model.lights.push(Vec2::new(
@@ -94,14 +94,12 @@ impl Model {
                     rng.gen_range(mouse_position.y - 10.0..mouse_position.y + 10.0),
                 ));     
             },
-            BuildMode::Remove => {
-                if app.mouse.buttons.left().is_down() {
-                    let mouse_position = app.mouse.position();
-                    model.lights
-                        .retain(|light| (mouse_position - *light).length() > 50.0);
-                }
+            BuildMode::Remove if app.mouse.buttons.left().is_down() => {
+                let mouse_position = app.mouse.position();
+                model.lights
+                    .retain(|light| (mouse_position - *light).length() > 50.0);
             },
-            BuildMode::Inactive => {},
+            _ => {},
         }
 
         let delta = update.since_last.as_secs_f32();
